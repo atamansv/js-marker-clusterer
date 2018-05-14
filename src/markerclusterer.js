@@ -116,6 +116,8 @@ function MarkerClusterer(map, opt_markers, opt_options) {
    */
   this.maxZoom_ = options['maxZoom'] || null;
 
+  this.maxDistance_ = options['maxDistance'] || null;
+
   this.styles_ = options['styles'] || [];
 
   /**
@@ -165,7 +167,12 @@ function MarkerClusterer(map, opt_markers, opt_options) {
   // Add the map event listeners
   var that = this;
   google.maps.event.addListener(this.map_, 'zoom_changed', function() {
+    // Determines map type and prevent illegal zoom levels
     var zoom = that.map_.getZoom();
+    var minZoom = that.map_.minZoom || 0;
+    var maxZoom = Math.min(that.map_.maxZoom || 100,
+      that.map_.mapTypes[that.map_.getMapTypeId()].maxZoom);
+    zoom = Math.min(Math.max(zoom,minZoom),maxZoom);
 
     if (that.prevZoom_ != zoom) {
       that.prevZoom_ = zoom;
@@ -178,7 +185,7 @@ function MarkerClusterer(map, opt_markers, opt_options) {
   });
 
   // Finally, add the markers
-  if (opt_markers && opt_markers.length) {
+  if (opt_markers && (opt_markers.length || Object.keys(opt_markers).length)) {
     this.addMarkers(opt_markers, false);
   }
 }
@@ -401,8 +408,14 @@ MarkerClusterer.prototype.getCalculator = function() {
  * @param {boolean=} opt_nodraw Whether to redraw the clusters.
  */
 MarkerClusterer.prototype.addMarkers = function(markers, opt_nodraw) {
-  for (var i = 0, marker; marker = markers[i]; i++) {
-    this.pushMarkerTo_(marker);
+  if (markers.length) {
+    for (var i = 0, marker; marker = markers[i]; i++) {
+      this.pushMarkerTo_(marker);
+    }
+  } else if (Object.keys(markers).length) {
+    for (var marker in markers) {
+      this.pushMarkerTo_(markers[marker]);
+    }
   }
   if (!opt_nodraw) {
     this.redraw();
@@ -744,9 +757,8 @@ MarkerClusterer.prototype.distanceBetweenPoints_ = function(p1, p2) {
  * @private
  */
 MarkerClusterer.prototype.addToClosestCluster_ = function(marker) {
-  var distance = 40000; // Some large number
+  var distance = this.maxDistance_; // max distance to group
   var clusterToAddTo = null;
-  var pos = marker.getPosition();
   for (var i = 0, cluster; cluster = this.clusters_[i]; i++) {
     var center = cluster.getCenter();
     if (center) {
@@ -761,7 +773,7 @@ MarkerClusterer.prototype.addToClosestCluster_ = function(marker) {
   if (clusterToAddTo && clusterToAddTo.isMarkerInClusterBounds(marker)) {
     clusterToAddTo.addMarker(marker);
   } else {
-    var cluster = new Cluster(this);
+    cluster = new Cluster(this);
     cluster.addMarker(marker);
     this.clusters_.push(cluster);
   }
@@ -1040,6 +1052,10 @@ function ClusterIcon(cluster, styles, opt_padding) {
   this.setMap(this.map_);
 }
 
+// implement this for custom behavior then reached max zoom
+MarkerClusterer.prototype.onClickMaxZoom = function() {
+  return true;
+};
 
 /**
  * Triggers the clusterclick event and zoom's if the option is set.
@@ -1051,6 +1067,14 @@ ClusterIcon.prototype.triggerClusterClick = function(event) {
 
   // Trigger the clusterclick event.
   google.maps.event.trigger(markerClusterer, 'clusterclick', this.cluster_, event);
+
+  var zoom = this.map_.getZoom();
+  var maxZoom = markerClusterer.getMaxZoom() || 100;
+  // if we have reached the maxZoom and there is more than 1 marker in this cluster
+  // use our onClickMaxZoom method to popup a list of options
+  if (zoom >= maxZoom && this.cluster_.markers_.length > 1) {
+    return markerClusterer.onClickMaxZoom(this);
+  }
 
   if (markerClusterer.isZoomOnClick()) {
     // Zoom into the cluster.
@@ -1081,6 +1105,7 @@ ClusterIcon.prototype.onAdd = function() {
     if (!isDragging) {
       that.triggerClusterClick(event);
     }
+    e.stopPropagation();
   });
   google.maps.event.addDomListener(this.div_, 'mousedown', function() {
     isDragging = false;
